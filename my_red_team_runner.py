@@ -3,64 +3,86 @@ import asyncio
 import aiohttp
 import json
 import os
-from typing import List, Optional
+from typing import List, Optional, Tuple, Union, Dict
+from pydantic import BaseModel
+from openai.types.chat import ChatCompletion
+from deepeval.models.llms.utils import trim_and_load_json
 from deepeval.models import LocalModel
 from deepteam.test_case import RTTurn
 from deepteam.red_teamer import RedTeamer
 from deepteam.vulnerabilities import PromptLeakage
-from deepteam.attacks.multi_turn import CrescendoJailbreaking
+from deepteam.attacks.multi_turn import LinearJailbreaking
+from deepteam.attacks.single_turn import Roleplay, GrayBox
 
 # Import our new logger
 from deepteam.logger_setup import logger
 
-# --- Monkey-Patching Section ---
-# Store the original methods that call the LLMs
-original_a_generate = LocalModel.a_generate
-original_generate = LocalModel.generate
+# --- Monkey-Patching Section (Full Copy Method) ---
 
-# Define our new async method with logging
-async def logged_a_generate(self, *args, **kwargs):
+async def logged_a_generate_full_copy(
+    self, prompt: str, schema: Optional[BaseModel] = None
+) -> Tuple[Union[str, Dict], float]:
     model_name = self.model or self.__class__.__name__
-    prompt = kwargs.get('prompt', args[0] if args else 'N/A')
-    
     logger.debug(f"--- ASYNC LLM CALL [{model_name}] ---")
     logger.debug(f"PROMPT:\n{prompt}")
-    
     try:
-        # Call the original method
-        result = await original_a_generate(self, *args, **kwargs)
-        logger.debug(f"RESPONSE:\n{result}")
-        return result
+        # This logic is a direct copy of LocalModel.a_generate, with logging added
+        client = self.load_model(async_mode=True)
+        response: ChatCompletion = await client.chat.completions.create(
+            model=self.model_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=self.temperature,
+            **self.generation_kwargs,
+        )
+        res_content = response.choices[0].message.content
+        logger.debug(f"RESPONSE:\n{res_content}")
+
+        if schema:
+            json_output = trim_and_load_json(res_content)
+            return schema.model_validate(json_output), 0.0
+        else:
+            return res_content, 0.0
     except Exception as e:
-        logger.error(f"LLM call to [{model_name}] failed: {e}")
+        logger.error(f"LLM call to [{model_name}] failed: {e}", exc_info=True)
         raise
     finally:
         logger.debug(f"--- END ASYNC LLM CALL [{model_name}] ---")
 
 
-# Define our new sync method with logging (for completeness)
-def logged_generate(self, *args, **kwargs):
+def logged_generate_full_copy(
+    self, prompt: str, schema: Optional[BaseModel] = None
+) -> Tuple[Union[str, Dict], float]:
     model_name = self.model or self.__class__.__name__
-    prompt = kwargs.get('prompt', args[0] if args else 'N/A')
-    
     logger.debug(f"--- SYNC LLM CALL [{model_name}] ---")
     logger.debug(f"PROMPT:\n{prompt}")
-    
     try:
-        # Call the original method
-        result = original_generate(self, *args, **kwargs)
-        logger.debug(f"RESPONSE:\n{result}")
-        return result
+        # This logic is a direct copy of LocalModel.generate, with logging added
+        client = self.load_model(async_mode=False)
+        response: ChatCompletion = client.chat.completions.create(
+            model=self.model_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=self.temperature,
+            **self.generation_kwargs,
+        )
+        res_content = response.choices[0].message.content
+        logger.debug(f"RESPONSE:\n{res_content}")
+
+        if schema:
+            json_output = trim_and_load_json(res_content)
+            return schema.model_validate(json_output), 0.0
+        else:
+            return res_content, 0.0
     except Exception as e:
-        logger.error(f"LLM call to [{model_name}] failed: {e}")
+        logger.error(f"LLM call to [{model_name}] failed: {e}", exc_info=True)
         raise
     finally:
         logger.debug(f"--- END SYNC LLM CALL [{model_name}] ---")
 
 
-# Apply the patches
-LocalModel.a_generate = logged_a_generate
-LocalModel.generate = logged_generate
+# Apply the new monkey-patch
+LocalModel.a_generate = logged_a_generate_full_copy
+LocalModel.generate = logged_generate_full_copy
+
 # --- End of Monkey-Patching Section ---
 
 
@@ -158,7 +180,12 @@ async def main():
 
     # Define the attack methods to use
     attacks = [
-        CrescendoJailbreaking(simulator_model=simulator_model, weight=1.0)
+        LinearJailbreaking(
+            simulator_model=simulator_model,
+            weight=1.0,
+            num_turns=7,
+            turn_level_attacks=[Roleplay(persona="expert"), GrayBox()]
+        )
     ]
 
     # Execute the red teaming process
