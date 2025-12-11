@@ -3,6 +3,7 @@ import asyncio
 import aiohttp
 import json
 import os
+import uuid
 from typing import List, Optional, Tuple, Union, Dict
 from pydantic import BaseModel
 from openai.types.chat import ChatCompletion
@@ -11,7 +12,7 @@ from deepeval.models import LocalModel
 from deepteam.test_case import RTTurn
 from deepteam.red_teamer import RedTeamer
 from deepteam.vulnerabilities import PromptLeakage
-from deepteam.attacks.multi_turn import LinearJailbreaking
+from deepteam.attacks.multi_turn import SequentialJailbreak,CrescendoJailbreaking
 from deepteam.attacks.single_turn import Roleplay, GrayBox
 
 # Import our new logger
@@ -22,9 +23,10 @@ from deepteam.logger_setup import logger
 async def logged_a_generate_full_copy(
     self, prompt: str, schema: Optional[BaseModel] = None
 ) -> Tuple[Union[str, Dict], float]:
+    call_id = uuid.uuid4()
     model_name = self.model or self.__class__.__name__
-    logger.debug(f"--- ASYNC LLM CALL [{model_name}] ---")
-    logger.debug(f"PROMPT:\n{prompt}")
+    logger.debug(f"--- ASYNC LLM CALL [{model_name}] | ID: {call_id} ---")
+    logger.debug(f"PROMPT (ID: {call_id}):\n{prompt}")
     try:
         # This logic is a direct copy of LocalModel.a_generate, with logging added
         client = self.load_model(async_mode=True)
@@ -35,7 +37,7 @@ async def logged_a_generate_full_copy(
             **self.generation_kwargs,
         )
         res_content = response.choices[0].message.content
-        logger.debug(f"RESPONSE:\n{res_content}")
+        logger.debug(f"RESPONSE (ID: {call_id}):\n{res_content}")
 
         if schema:
             json_output = trim_and_load_json(res_content)
@@ -43,18 +45,19 @@ async def logged_a_generate_full_copy(
         else:
             return res_content, 0.0
     except Exception as e:
-        logger.error(f"LLM call to [{model_name}] failed: {e}", exc_info=True)
+        logger.error(f"LLM call to [{model_name}] failed (ID: {call_id}): {e}", exc_info=True)
         raise
     finally:
-        logger.debug(f"--- END ASYNC LLM CALL [{model_name}] ---")
+        logger.debug(f"--- END ASYNC LLM CALL [{model_name}] | ID: {call_id} ---")
 
 
 def logged_generate_full_copy(
     self, prompt: str, schema: Optional[BaseModel] = None
 ) -> Tuple[Union[str, Dict], float]:
+    call_id = uuid.uuid4()
     model_name = self.model or self.__class__.__name__
-    logger.debug(f"--- SYNC LLM CALL [{model_name}] ---")
-    logger.debug(f"PROMPT:\n{prompt}")
+    logger.debug(f"--- SYNC LLM CALL [{model_name}] | ID: {call_id} ---")
+    logger.debug(f"PROMPT (ID: {call_id}):\n{prompt}")
     try:
         # This logic is a direct copy of LocalModel.generate, with logging added
         client = self.load_model(async_mode=False)
@@ -65,7 +68,7 @@ def logged_generate_full_copy(
             **self.generation_kwargs,
         )
         res_content = response.choices[0].message.content
-        logger.debug(f"RESPONSE:\n{res_content}")
+        logger.debug(f"RESPONSE (ID: {call_id}):\n{res_content}")
 
         if schema:
             json_output = trim_and_load_json(res_content)
@@ -73,10 +76,10 @@ def logged_generate_full_copy(
         else:
             return res_content, 0.0
     except Exception as e:
-        logger.error(f"LLM call to [{model_name}] failed: {e}", exc_info=True)
+        logger.error(f"LLM call to [{model_name}] failed (ID: {call_id}): {e}", exc_info=True)
         raise
     finally:
-        logger.debug(f"--- END SYNC LLM CALL [{model_name}] ---")
+        logger.debug(f"--- END SYNC LLM CALL [{model_name}] | ID: {call_id} ---")
 
 
 # Apply the new monkey-patch
@@ -180,11 +183,12 @@ async def main():
 
     # Define the attack methods to use
     attacks = [
-        LinearJailbreaking(
+        CrescendoJailbreaking(
             simulator_model=simulator_model,
             weight=1.0,
-            num_turns=7,
-            turn_level_attacks=[Roleplay(persona="expert"), GrayBox()]
+            max_rounds=15,
+            #num_turns=7,
+            turn_level_attacks=[GrayBox()]
         )
     ]
 
@@ -193,7 +197,7 @@ async def main():
         model_callback=model_callback,
         vulnerabilities=vulnerabilities,
         attacks=attacks,
-        attacks_per_vulnerability_type=10,  # from system_config.attacks_per_vulnerability_type
+        attacks_per_vulnerability_type=1,  # from system_config.attacks_per_vulnerability_type
         ignore_errors=False
     )
 
