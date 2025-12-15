@@ -24,10 +24,25 @@ from .goal_theft.goal_theft import GoalTheft
 from .recursive_hijacking.recursive_hijacking import RecursiveHijacking
 from .robustness.robustness import Robustness
 from .excessive_agency.excessive_agency import ExcessiveAgency
+from .socialist_values_violation import SocialistValuesViolation, SocialistValuesViolationTypes
+from .discriminatory_content import DiscriminatoryContent, DiscriminatoryContentTypes
+from .commercial_violation import CommercialViolation, CommercialViolationTypes
+from .rights_infringement import RightsInfringement, RightsInfringementTypes
+from .service_safety import ServiceSafety, ServiceSafetyTypes
 
 
 __all__ = [
     "BaseVulnerability",
+    "SocialistValuesViolation",
+    "SocialistValuesViolationTypes",
+    "DiscriminatoryContent",
+    "DiscriminatoryContentTypes",
+    "CommercialViolation",
+    "CommercialViolationTypes",
+    "RightsInfringement",
+    "RightsInfringementTypes",
+    "ServiceSafety",
+    "ServiceSafetyTypes",
     "Bias",
     "ChildProtection",
     "Ethics",

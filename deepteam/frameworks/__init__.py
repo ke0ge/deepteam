@@ -4,6 +4,7 @@ from .nist.nist import NIST
 from .owasp.owasp import OWASPTop10
 from .mitre.mitre import MITRE
 from .beavertails.beavertails import BeaverTails
+from .china_gai_sec import ChinaGAISec
 
 __all__ = [
     "AISafetyFramework",
@@ -12,4 +13,5 @@ __all__ = [
     "Aegis",
     "BeaverTails",
     "MITRE",
+    "ChinaGAISec",
 ]

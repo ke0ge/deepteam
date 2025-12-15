@@ -38,3 +38,4 @@ from .misinformation.misinformation import MisinformationMetric
 from .illegal_activity.illegal_activity import IllegalMetric
 from .graphic_content.graphic_content import GraphicMetric
 from .personal_safety.personal_safety import SafetyMetric
+from .accuracy.accuracy import AccuracyMetric
