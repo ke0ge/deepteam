@@ -11,7 +11,7 @@ from deepeval.models.llms.utils import trim_and_load_json
 from deepeval.models import LocalModel
 from deepteam.test_case import RTTurn
 from deepteam.red_teamer import RedTeamer
-from deepteam.vulnerabilities import PromptLeakage
+from deepteam.vulnerabilities import PromptLeakage,Bias,IllegalActivity
 from deepteam.attacks.multi_turn import SequentialJailbreak,CrescendoJailbreaking
 from deepteam.attacks.single_turn import Roleplay, GrayBox
 
@@ -89,72 +89,55 @@ LocalModel.generate = logged_generate_full_copy
 # --- End of Monkey-Patching Section ---
 
 
-# Part 1: Define the model callback function, adapted from callback.py, now with logging
-async def model_callback(input_str: str, turns: Optional[List[RTTurn]] = None) -> str:
+# Import the client from our refactored module
+from chat_dida import DidaApiClient, BASE_URL, COOKIES, APP_ID, PROXY_URL
+from deepteam.attacks.multi_turn import BaseMultiTurnAttack
+# --- Callback Strategies ---
+
+async def single_turn_callback_factory(*args, **kwargs):
     """
-    Callback function to adapt to the target API.
-    Handles both single-turn and multi-turn scenarios.
+    Factory function that creates a new client and session for each call.
+    Ideal for independent, single-turn attacks.
     """
-    logger.info("--- TARGET MODEL CALL ---")
-    logger.info(f"INPUT: {input_str}")
-    if turns:
-        logger.debug(f"Received {len(turns)} turns in conversation history.")
+    client = DidaApiClient(BASE_URL, COOKIES, APP_ID, PROXY_URL)
+    initialized = await client.initialize()
+    if not initialized:
+        raise ConnectionError("Failed to initialize Dida API client for a single-turn attack.")
+    return await client.chat(*args, **kwargs)
 
-    url = "https://llm-fy-legal.fuyuncc.com/aodesai-pulomixiusi-heidee/plux"
-    token = os.getenv("API_TOKEN", "1246g2i2365b4cbc9u40a9fa5ctwa471")
-    
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    
-    # Construct the dialogue from turns if available, otherwise use input_str
-    if turns:
-        dialogue = [{"role": turn.role, "content": turn.content} for turn in turns]
-    else:
-        dialogue = [{"role": "user", "content": input_str}]
+def get_multi_turn_callback():
+    """
+    Creates a stateful callback for multi-turn attacks.
+    It uses a single client instance throughout the attack.
+    """
+    # 1. A single client is created and lives within this closure.
+    client = DidaApiClient(BASE_URL, COOKIES, APP_ID, PROXY_URL)
+    logger.info(f"Multi-turn DidaApiClient instance created with object ID: {id(client)}")
 
-    payload = {
-        "dialogue": dialogue,
-        "model": "legal_llm",
-        "stream": False
-    }
+    async def callback(*args, **kwargs):
+        """
+        The actual callback function passed to the red teamer.
+        It ensures the client is initialized before chatting.
+        """
+        # 2. Check which client instance this callback is using.
+        logger.debug(f"Multi-turn callback is using client instance with object ID: {id(client)}")
+        if not client.conversation_id:
+            # 3. If not, initialize it once.
+            initialized = await client.initialize()
+            if not initialized:
+                raise ConnectionError("Failed to initialize Dida API client for multi-turn attack.")
+        
+        # 4. Now, call the chat method on the persistent client.
+        return await client.chat(*args, **kwargs)
 
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(url, headers=headers, json=payload) as response:
-                response_text = await response.text()
-                if response.status == 200:
-                    logger.info(f"OUTPUT (status {response.status}):\n{response_text}")
-                    # IMPORTANT: The original code returned the full JSON.
-                    # If the target model returns JSON, we should extract the text.
-                    # Assuming the actual content is in result['choices'][0]['message']['content']
-                    try:
-                        result_json = json.loads(response_text)
-                        # Modify this line based on the actual API response structure
-                        # return result_json['choices'][0]['message']['content']
-                        return response_text # For now, return the full text to match original behavior
-                    except json.JSONDecodeError:
-                         return response_text # Return as plain text if not JSON
-                else:
-                    error_message = f"Error: API returned status code {response.status}, message: {response_text}"
-                    logger.error(error_message)
-                    return error_message
-        except Exception as e:
-            error_message = f"Error: Request failed - {str(e)}"
-            logger.error(error_message)
-            return error_message
+    return callback
 
 # Part 2: Main execution logic, adapted from my.yaml
 async def main():
     logger.info("--- Starting Red Teaming Process ---")
 
-    # Configure the models to use OpenRouter (API compatible with OpenAI)
-    # openrouter_api_key = "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"
-    # model = "tngtech/deepseek-r1t2-chimera:free"
-    # url = "https://openrouter.ai/api/v1"
+    # Configure the simulator models
     api_key = "sk-aasd12esazdx"
-
     simulator_model = LocalModel(
         model="gemini-2.5-pro-nothinking",
         api_key=api_key,
@@ -171,27 +154,41 @@ async def main():
     red_teamer = RedTeamer(
         simulator_model=simulator_model,
         evaluation_model=evaluation_model,
-        target_purpose="A helpful AI legal assistant",
+        target_purpose="A helpful Campus AI Assistant",
         async_mode=True,
         max_concurrent=3  # from system_config.max_concurrent
     )
 
     # Define the vulnerabilities to test
     vulnerabilities = [
-        PromptLeakage(types=["instructions"])
+        # PromptLeakage(types=[#"secrets_and_credentials",
+        #                      "instructions",
+        #                      "guard_exposure",
+        #                      #"permissions_and_roles",
+        #                      ])
+        IllegalActivity(types=["illegal_drugs"])
     ]
 
     # Define the attack methods to use
     attacks = [
-        CrescendoJailbreaking(
-            simulator_model=simulator_model,
-            weight=1.0,
-            max_rounds=15,
-            #num_turns=7,
-            turn_level_attacks=[GrayBox()]
-        )
+        # CrescendoJailbreaking(
+        #     simulator_model=simulator_model,
+        #     weight=1.0,
+        #     max_rounds=3, # Using a small number of rounds for a quick test
+        # )
+        GrayBox(weight=2, max_retries=7)
     ]
 
+    # --- Determine Callback Strategy based on Attack Type ---
+    # This is a simplified check. A more robust implementation might inspect
+    # all attacks if a mix is possible. We'll assume the first attack determines the type.
+    if attacks and isinstance(attacks[0], BaseMultiTurnAttack):
+        logger.info("Multi-turn attack detected. Using a single persistent session for the callback.")
+        model_callback = get_multi_turn_callback()
+    else:
+        logger.info("Single-turn attack detected. Using a new session for each callback.")
+        model_callback = single_turn_callback_factory
+    
     # Execute the red teaming process
     risk_assessment = await red_teamer.a_red_team(
         model_callback=model_callback,

@@ -1,150 +1,146 @@
 import requests
 import json
 import sys
+import aiohttp
+import asyncio
 import urllib3
+import uuid
+from typing import Optional, List
+
+# Import the logger from the project
+from deepteam.logger_setup import logger
 
 # 禁用 InsecureRequestWarning 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= 配置区域 =================
-# 1. 填入你在 Network 面板抓到的 Request URL 的前半部分 (去掉 /chat-messages)
-# 例如: https://api.dify.ai/v1 或 http://example.com/v1
 BASE_URL = "https://chat.cug.edu.cn/ai-agent-hub-svc/chat" 
-
-# 2. 填入 Authorization Header 中的 Bearer Token
-# 注意：如果是公开 WebApp，可能需要抓取 Header 里的 Authorization
-# 如果你是开发者，直接在 Dify 后台创建 API Key
 COOKIES = "aiagent-sso-token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJsb2dpblR5cGUiOiJsb2dpbiIsImxvZ2luSWQiOjIwOTk5OTkwMDAwMDAwNzk1NjUsInJuU3RyIjoiZ2ExWjZmdG9wZGthd2lSWGE0d3dLMlMwMzVjdWdjZlkiLCJ0aGlyZFVzZXJJZCI6IjIwMjQ5ODAwOTAiLCJ1cGRhdGVUaW1lIjoxNzY1NTIwNDIzLCJ1c2VyTmFtZSI6IumeoOeBvyIsImV4dEluZm8iOiJ7XCJzY2hvb2xfdHlwZVwiOlwi5L-h5oGv5YyW5bel5L2c5Yqe5YWs5a6kXCIsXCJzdWJqZWN0XCI6XCLpnqDngb9cIixcInN0dWRlbnRfbm9cIjpcIjIwMjQ5ODAwOTBcIixcInVzZXJfdHlwZVwiOlwidGVhY2hlclwiLFwic3R1ZGVudF90eXBlXCI6XCJcIn0iLCJ0aGlyZFNvdXJjZSI6InRoaXJkVGVzdCIsImxhc3RMb2dpblRpbWUiOjE3NjU1MjA0MjMsInRoaXJkVGVuYW50SWQiOiIwIiwiY3JlYXRlVGltZSI6MTc1MzkzMTM5MSwiaWQiOjIwOTk5OTkwMDAwMDAwNzk1NjUsInVzZXJUeXBlIjoiVEVBQ0hFUiJ9.AZrrMYbCYWd2kfPgegpPwcAxBPZiii_yO5ymfzgmEdg"
-
-# 3. 用户标识 (可以是任意字符串，用来区分不同用户)
-USER_ID = "python-script-user"
+APP_ID = "1000001000000000001"
+PROXY_URL = "http://127.0.0.1:8080"
 # ===========================================
 
-headers = {
-    "Cookie": f"{COOKIES}",
-    "Content-Type": "application/json"
-}
-
-def init_conversation():
+class DidaApiClient:
     """
-    第一步：强制调用初始化接口获取 conversation_id
-    接口: GET /chat/conversation
+    一个用于与 Dida API 交互的客户端，封装了 API 调用逻辑。
+    每个实例代表一个独立的对话会话。
     """
-    url = f"{BASE_URL}/conversation" # 修正了URL路径
-    
-    # 根据你提供的参数构造
-    params = {
-        "appId": "1000001000000000001", # 根据JSON响应更新为正确的appId
-        "conversationId": "",  # 空字符串表示新建
-        "useLast": "false",    # 不使用上一次的会话
-        "message": "false"     # 仅初始化，不发送消息
-    }
+    def __init__(self, base_url, cookies, app_id, proxy_url=None):
+        self.base_url = base_url
+        self.headers = {"Cookie": cookies, "Content-Type": "application/json"}
+        self.app_id = app_id
+        self.proxy = proxy_url
+        self.conversation_id: Optional[str] = None
 
-    proxies = {
-        "http": "http://127.0.0.1:8080",
-        "https": "http://127.0.0.1:8080",
-    }
-    
-    try:
-        print("正在初始化新会话...", end="")
-        response = requests.get(url, headers=headers, params=params, proxies=proxies, verify=False)
-        response.raise_for_status()
+    async def initialize(self) -> bool:
+        """
+        初始化会话并获取 conversation_id。
+        :return: 如果成功则返回 True，否则返回 False。
+        """
+        if self.conversation_id:
+            logger.warning("Conversation already initialized.")
+            return True
+
+        url = f"{self.base_url}/conversation"
+        params = {
+            "appId": self.app_id,
+            "conversationId": "",
+            "useLast": "false",
+            "message": "false"
+        }
         
-        data = response.json()
-        
-        # 根据您提供的返回格式，从 data['conversation']['id'] 提取会话ID
-        conversation_id = data.get('conversation', {}).get('id')
+        logger.info("Initializing new dida conversation...")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, headers=self.headers, params=params, 
+                    proxy=self.proxy, ssl=False
+                ) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    
+                    cid = data.get('conversation', {}).get('id')
+                    if cid:
+                        logger.info(f"Dida conversation initialized successfully. ID: {cid}")
+                        self.conversation_id = cid
+                        return True
+                    else:
+                        logger.error(f"Failed to initialize dida conversation. Response: {data}")
+                        return False
+        except Exception as e:
+            logger.error(f"Error initializing dida conversation: {e}", exc_info=True)
+            return False
 
-        if conversation_id:
-            print(f" 成功! ID: {conversation_id}")
-            return conversation_id
-        else:
-            print(f"\n初始化失败，未找到 ID。响应内容: {data}")
-            return None
+    async def chat(self, input_str: str, turns: Optional[List] = None) -> str:
+        """
+        发送消息到 Dida API。必须先调用 initialize()。
+        """
+        if not self.conversation_id:
+            logger.error("Conversation not initialized. Please call initialize() first.")
+            return "Error: Conversation not initialized."
 
-    except Exception as e:
-        print(f"\n初始化连接错误: {e}")
-        return None
+        call_id = uuid.uuid4()
+        logger.info(f"[DIDA CALL | Conv: {self.conversation_id[:8]} | ID: {call_id}] INPUT: {input_str}")
 
-def chat_message(query, conversation_id=None):
-    url = f"{BASE_URL}/chat-messages"
+        url = f"{self.base_url}/chat-messages"
+        payload = {
+            "inputs": {"modelName": "qwq-32b", "think": "true", "webSearch": "false"},
+            "query": input_str,
+            "response_mode": "streaming",
+            "conversationId": self.conversation_id,
+        }
 
-    payload = {
-        "inputs": {"modelName":"qwq-32b","think":"true","webSearch":"false"},  # 如果应用有预设变量，需在此填入
-        "query": query,
-        "response_mode": "streaming",  # 推荐使用流式，响应更快
-        "conversationId": conversation_id,
-    }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url, headers=self.headers, json=payload, 
+                    proxy=self.proxy, ssl=False
+                ) as response:
+                    response.raise_for_status()
+                    
+                    full_answer = ""
+                    async for line in response.content:
+                        if line:
+                            line_str = line.decode('utf-8').strip()
+                            if line_str.startswith("data:"):
+                                json_str = line_str[len("data:"):].strip()
+                                try:
+                                    data = json.loads(json_str)
+                                    if data.get("event") == "message":
+                                        full_answer += data.get("answer", "")
+                                    elif data.get("event") == "error":
+                                        error_msg = f"Dida API Error: {data.get('message')}"
+                                        logger.error(f"[DIDA CALL | ID: {call_id}] {error_msg}")
+                                        return error_msg
+                                except json.JSONDecodeError:
+                                    continue
+                    
+                    logger.info(f"[DIDA CALL | Conv: {self.conversation_id[:8]} | ID: {call_id}] OUTPUT: {full_answer}")
+                    return full_answer
+        except Exception as e:
+            error_message = f"Error during Dida API call (ID: {call_id}): {e}"
+            logger.error(error_message, exc_info=True)
+            return error_message
 
-    proxies = {
-        "http": "http://127.0.0.1:8080",
-        "https": "http://127.0.0.1:8080",
-    }
+# --- 以下为脚本独立运行时使用的代码 ---
 
-    try:
-        response = requests.post(url, headers=headers, json=payload, stream=True, proxies=proxies, verify=False)
-        response.raise_for_status()
-
-        # 处理流式响应
-        print("Bot: ", end="", flush=True)
-        full_answer = ""
-
-        for line in response.iter_lines():
-            if line:
-                line = line.decode('utf-8')
-                
-                # Dify 的流式数据以 'data: ' 开头
-                if line.startswith("data: "):
-                    json_str = line[6:] # 去掉前缀
-                    try:
-                        data = json.loads(json_str)
-                        
-                        # 获取消息内容
-                        if data.get("event") == "message":
-                            answer_chunk = data.get("answer", "")
-                            print(answer_chunk, end="", flush=True)
-                            full_answer += answer_chunk
-                            
-                        # 结束或错误处理
-                        elif data.get("event") == "error":
-                            print(f"\n[Error]: {data.get('message')}")
-                            
-                    except json.JSONDecodeError:
-                        pass
-        
-        print("\n") # 换行
-        # 因为我们现在总是使用初始ID，所以不需要返回新的ID
+async def main_async_cli():
+    client = DidaApiClient(BASE_URL, COOKIES, APP_ID, PROXY_URL)
+    if not await client.initialize():
+        logger.error("无法初始化 Dida 客户端，程序退出。")
         return
 
-    except requests.exceptions.RequestException as e:
-        print(f"\n请求失败: {e}")
-        return
-
-def main():
-    # 1. 程序启动，先握手
-    current_conversation_id = init_conversation()
-    
-    if not current_conversation_id:
-        print("无法获取会话 ID，程序退出。")
-        return
-    
     print("=== Dify 对话终端 (输入 'exit' 退出) ===")
-    
     while True:
         try:
-            user_input = input("You: ")
-            if user_input.lower() in ["exit", "quit"]:
-                break
-            
-            if not user_input.strip():
-                continue
-                
-            # 发送请求并更新 conversation_id 以保持上下文
-            chat_message(user_input, current_conversation_id)
-            
-        except KeyboardInterrupt:
+            user_input = await asyncio.to_thread(input, "You: ")
+            if user_input.lower() in ["exit", "quit"]: break
+            if not user_input.strip(): continue
+            response = await client.chat(user_input)
+            print(f"Bot: {response}\n")
+        except (KeyboardInterrupt, EOFError):
             print("\n退出程序")
             break
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main_async_cli())
