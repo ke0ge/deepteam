@@ -1,9 +1,9 @@
 
 import asyncio
-import aiohttp
-import json
 import os
 import uuid
+import argparse
+import json
 from typing import List, Optional, Tuple, Union, Dict
 from pydantic import BaseModel
 from openai.types.chat import ChatCompletion
@@ -11,7 +11,21 @@ from deepeval.models.llms.utils import trim_and_load_json
 from deepeval.models import LocalModel
 from deepteam.test_case import RTTurn
 from deepteam.red_teamer import RedTeamer
-from deepteam.vulnerabilities import PromptLeakage,Bias,IllegalActivity
+from deepteam.vulnerabilities import (
+    PromptLeakage,
+    Bias,
+    IllegalActivity,
+    CommercialViolation,
+    CommercialViolationTypes,
+    DiscriminatoryContent,
+    DiscriminatoryContentTypes,
+    RightsInfringement,
+    RightsInfringementTypes,
+    ServiceSafety,
+    ServiceSafetyTypes,
+    SocialistValuesViolation,
+    SocialistValuesViolationTypes,
+)
 from deepteam.attacks.multi_turn import SequentialJailbreak,CrescendoJailbreaking
 from deepteam.attacks.single_turn import Roleplay, GrayBox
 
@@ -132,12 +146,13 @@ def get_multi_turn_callback():
 
     return callback
 
-# Part 2: Main execution logic, adapted from my.yaml
-async def main():
-    logger.info("--- Starting Red Teaming Process ---")
+# Part 2: Main execution logic
+async def run_test_mode():
+    """Runs the default red teaming assessment and saves the report."""
+    logger.info("--- Starting Red Teaming Process [Test Mode] ---")
 
     # Configure the simulator models
-    api_key = "sk-aasd12esazdx"
+    api_key = "st123456"
     simulator_model = LocalModel(
         model="gemini-2.5-pro-nothinking",
         api_key=api_key,
@@ -161,12 +176,26 @@ async def main():
 
     # Define the vulnerabilities to test
     vulnerabilities = [
-        # PromptLeakage(types=[#"secrets_and_credentials",
-        #                      "instructions",
-        #                      "guard_exposure",
-        #                      #"permissions_and_roles",
-        #                      ])
-        IllegalActivity(types=["illegal_drugs"])
+        SocialistValuesViolation(
+            types=[t for t in SocialistValuesViolationTypes],
+            simulator_model=simulator_model,
+        ),
+        DiscriminatoryContent(
+            types=[t for t in DiscriminatoryContentTypes],
+            simulator_model=simulator_model,
+        ),
+        CommercialViolation(
+            types=[t for t in CommercialViolationTypes],
+            simulator_model=simulator_model,
+        ),
+        RightsInfringement(
+            types=[t for t in RightsInfringementTypes],
+            simulator_model=simulator_model,
+        ),
+        ServiceSafety(
+            types=[t for t in ServiceSafetyTypes],
+            simulator_model=simulator_model,
+        ),
     ]
 
     # Define the attack methods to use
@@ -208,15 +237,135 @@ async def main():
     report_path = risk_assessment.save(to=output_folder)
     print(f"📄 Risk assessment report saved to: {report_path}")
 
-    # You can also access the overview directly
-    # print("\\n📊 Assessment Overview:")
-    # print(risk_assessment.overview)
+async def run_generate_mode(output_filename: str):
+    """Applies a monkey-patch to only generate test cases and save them to a file."""
+    logger.info(f"--- Starting Dataset Generation Process [Generate Mode] ---")
 
-# Part 3: Run the main function
-if __name__ == "__main__":
+    # 1. Monkey-patch RedTeamer.a_red_team
+    original_a_red_team = RedTeamer.a_red_team
+    async def generate_only_a_red_team(self, *args, **kwargs):
+        logger.info("--- Using monkey-patched a_red_team for dataset generation ---")
+        simulated_test_cases: List[RTTurn] = await self.attack_simulator.a_simulate(
+            attacks_per_vulnerability_type=kwargs.get('attacks_per_vulnerability_type', 1),
+            vulnerabilities=kwargs.get('vulnerabilities'),
+            attacks=kwargs.get('attacks'),
+            simulator_model=self.simulator_model,
+            ignore_errors=kwargs.get('ignore_errors', True),
+            metadata=kwargs.get('metadata')
+        )
+        logger.info(f"Successfully generated {len(simulated_test_cases)} test cases.")
+        return simulated_test_cases
+    
+    RedTeamer.a_red_team = generate_only_a_red_team
+    logger.info("Monkey-patched RedTeamer.a_red_team to support 'generate-only' mode.")
+
+    # 2. Configure models and RedTeamer (similar to test mode)
+    api_key = "st123456"
+    simulator_model = LocalModel(
+        model="gemini-2.5-pro-nothinking",
+        api_key=api_key,
+        base_url="http://127.0.0.1:8888/v1/"
+    )
+    red_teamer = RedTeamer(
+        simulator_model=simulator_model,
+        evaluation_model=simulator_model, # Not used, but required by constructor
+        async_mode=True
+    )
+
+    # 3. Define the same vulnerabilities and attacks
+    vulnerabilities = [
+        SocialistValuesViolation(
+            types=[t for t in SocialistValuesViolationTypes],
+            simulator_model=simulator_model,
+        ),
+        DiscriminatoryContent(
+            types=[t for t in DiscriminatoryContentTypes],
+            simulator_model=simulator_model,
+        ),
+        CommercialViolation(
+            types=[t for t in CommercialViolationTypes],
+            simulator_model=simulator_model,
+        ),
+        RightsInfringement(
+            types=[t for t in RightsInfringementTypes],
+            simulator_model=simulator_model,
+        ),
+        ServiceSafety(
+            types=[t for t in ServiceSafetyTypes],
+            simulator_model=simulator_model,
+        ),
+    ]
+    attacks = [GrayBox(weight=2, max_retries=7)]
+
+    # 4. Execute the patched red teaming process
+    generated_test_cases = await red_teamer.a_red_team(
+        model_callback=lambda: None,  # Dummy callback, not used
+        vulnerabilities=vulnerabilities,
+        attacks=attacks,
+        attacks_per_vulnerability_type=1,
+        ignore_errors=True
+    )
+
+    # 5. Process and save the results to JSONL
+    if not generated_test_cases:
+        logger.warning("Generation process returned no test cases.")
+        # Restore original method before exiting
+        RedTeamer.a_red_team = original_a_red_team
+        return
+
+    output_dir = os.path.dirname(output_filename)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        
+    count = 0
+    with open(output_filename, 'w', encoding='utf-8') as f:
+        for case in generated_test_cases:
+            case_dict = {
+                "dataset_id": str(uuid.uuid4()),
+                "input": case.input,
+                "turns": [turn.model_dump() for turn in case.turns] if case.turns else None,
+                "vulnerability": case.vulnerability,
+                "vulnerability_type": case.vulnerability_type.value if case.vulnerability_type else None,
+                "attack_method": case.attack_method,
+                "risk_category": case.risk_category,
+                "metadata": case.metadata
+            }
+            case_dict_cleaned = {k: v for k, v in case_dict.items() if v is not None}
+            f.write(json.dumps(case_dict_cleaned, ensure_ascii=False) + '\\n')
+            count += 1
+            
+    logger.info(f"✅ Dataset generation finished! {count} test cases saved to '{output_filename}'.")
+    
+    # 6. Restore the original method
+    RedTeamer.a_red_team = original_a_red_team
+    logger.info("Restored original RedTeamer.a_red_team method.")
+
+
+# Part 3: CLI and Main Execution
+def main():
+    parser = argparse.ArgumentParser(description="Run DeepTeam red teaming scenarios.")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=['test', 'generate'],
+        default='test',
+        help="Execution mode: 'test' to run a full assessment, 'generate' to create a dataset."
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="dataset.jsonl",
+        help="Output file for 'generate' mode."
+    )
+    args = parser.parse_args()
+
     try:
-        # If you are on Windows and encounter an asyncio error, you might need the following line:
-        # asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        asyncio.run(main())
+        if args.mode == 'generate':
+            asyncio.run(run_generate_mode(args.output))
+        else:
+            asyncio.run(run_test_mode())
     except Exception as e:
         logger.critical(f"An unhandled exception occurred: {e}", exc_info=True)
+
+if __name__ == "__main__":
+    main()
