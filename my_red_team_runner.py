@@ -26,7 +26,7 @@ from deepteam.vulnerabilities import (
     SocialistValuesViolation,
     SocialistValuesViolationTypes,
 )
-from deepteam.attacks.multi_turn import SequentialJailbreak,CrescendoJailbreaking
+from deepteam.attacks.multi_turn import SequentialJailbreak,CrescendoJailbreaking, EchoChamberAttack
 from deepteam.attacks.single_turn import Roleplay, GrayBox
 
 # Import our new logger
@@ -113,7 +113,7 @@ async def single_turn_callback_factory(*args, **kwargs):
     Factory function that creates a new client and session for each call.
     Ideal for independent, single-turn attacks.
     """
-    client = DidaApiClient(BASE_URL, COOKIES, APP_ID, PROXY_URL)
+    client = DidaApiClient(BASE_URL, COOKIES, APP_ID)
     initialized = await client.initialize()
     if not initialized:
         raise ConnectionError("Failed to initialize Dida API client for a single-turn attack.")
@@ -125,7 +125,7 @@ def get_multi_turn_callback():
     It uses a single client instance throughout the attack.
     """
     # 1. A single client is created and lives within this closure.
-    client = DidaApiClient(BASE_URL, COOKIES, APP_ID, PROXY_URL)
+    client = DidaApiClient(BASE_URL, COOKIES, APP_ID)
     logger.info(f"Multi-turn DidaApiClient instance created with object ID: {id(client)}")
 
     async def callback(*args, **kwargs):
@@ -152,7 +152,7 @@ async def run_test_mode():
     logger.info("--- Starting Red Teaming Process [Test Mode] ---")
 
     # Configure the simulator models
-    api_key = "st123456"
+    api_key = "sk-123456"
     simulator_model = LocalModel(
         model="gemini-2.5-pro-nothinking",
         api_key=api_key,
@@ -176,36 +176,41 @@ async def run_test_mode():
 
     # Define the vulnerabilities to test
     vulnerabilities = [
-        SocialistValuesViolation(
-            types=[t for t in SocialistValuesViolationTypes],
-            simulator_model=simulator_model,
-        ),
-        DiscriminatoryContent(
-            types=[t for t in DiscriminatoryContentTypes],
-            simulator_model=simulator_model,
-        ),
-        CommercialViolation(
-            types=[t for t in CommercialViolationTypes],
-            simulator_model=simulator_model,
-        ),
-        RightsInfringement(
-            types=[t for t in RightsInfringementTypes],
-            simulator_model=simulator_model,
-        ),
-        ServiceSafety(
-            types=[t for t in ServiceSafetyTypes],
-            simulator_model=simulator_model,
-        ),
+        # SocialistValuesViolation(
+        #     types=[t for t in SocialistValuesViolationTypes],
+        #     simulator_model=simulator_model,
+        # ),
+        # DiscriminatoryContent(
+        #     types=[t for t in DiscriminatoryContentTypes],
+        #     simulator_model=simulator_model,
+        # ),
+        # CommercialViolation(
+        #     types=[t for t in CommercialViolationTypes],
+        #     simulator_model=simulator_model,
+        # ),
+        # RightsInfringement(
+        #     types=[t for t in RightsInfringementTypes],
+        #     simulator_model=simulator_model,
+        # ),
+        # ServiceSafety(
+        #     types=[t for t in ServiceSafetyTypes],
+        #     simulator_model=simulator_model,
+        # ),
+        IllegalActivity(types=["weapons"])
     ]
 
     # Define the attack methods to use
     attacks = [
+        EchoChamberAttack(
+            simulator_model=simulator_model,
+            max_rounds=3, # Using a small number of rounds for a quick test
+        )
         # CrescendoJailbreaking(
         #     simulator_model=simulator_model,
         #     weight=1.0,
-        #     max_rounds=3, # Using a small number of rounds for a quick test
-        # )
-        GrayBox(weight=2, max_retries=7)
+        #     max_rounds=3, 
+        # ),
+        # GrayBox(weight=2, max_retries=7)
     ]
 
     # --- Determine Callback Strategy based on Attack Type ---
@@ -260,7 +265,7 @@ async def run_generate_mode(output_filename: str):
     logger.info("Monkey-patched RedTeamer.a_red_team to support 'generate-only' mode.")
 
     # 2. Configure models and RedTeamer (similar to test mode)
-    api_key = "st123456"
+    api_key = "sk-123456"
     simulator_model = LocalModel(
         model="gemini-2.5-pro-nothinking",
         api_key=api_key,
