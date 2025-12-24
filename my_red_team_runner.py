@@ -12,6 +12,7 @@ from deepeval.models import LocalModel
 from deepteam.test_case import RTTurn
 from deepteam.red_teamer import RedTeamer
 from deepteam.vulnerabilities import (
+    DebugAccess,
     PromptLeakage,
     Bias,
     IllegalActivity,
@@ -104,7 +105,7 @@ LocalModel.generate = logged_generate_full_copy
 
 
 # Import the client from our refactored module
-from chat_dida import DidaApiClient, BASE_URL, COOKIES, APP_ID, PROXY_URL
+from chat_4portun import FortunApiClient, BASE_URL, AUTHORIZATION_TOKEN, PROXY_URL
 from deepteam.attacks.multi_turn import BaseMultiTurnAttack
 # --- Callback Strategies ---
 
@@ -113,10 +114,10 @@ async def single_turn_callback_factory(*args, **kwargs):
     Factory function that creates a new client and session for each call.
     Ideal for independent, single-turn attacks.
     """
-    client = DidaApiClient(BASE_URL, COOKIES, APP_ID)
-    initialized = await client.initialize()
-    if not initialized:
-        raise ConnectionError("Failed to initialize Dida API client for a single-turn attack.")
+    # For 4portun, each call can be a new session if needed, or we can reuse.
+    # Here, we create a new client for simplicity, ensuring no cross-talk.
+    client = FortunApiClient(BASE_URL, AUTHORIZATION_TOKEN, proxy_url=None)
+    # No explicit initialize() call is needed as chat_id is created in __init__
     return await client.chat(*args, **kwargs)
 
 def get_multi_turn_callback():
@@ -125,23 +126,19 @@ def get_multi_turn_callback():
     It uses a single client instance throughout the attack.
     """
     # 1. A single client is created and lives within this closure.
-    client = DidaApiClient(BASE_URL, COOKIES, APP_ID)
-    logger.info(f"Multi-turn DidaApiClient instance created with object ID: {id(client)}")
+    # This client maintains the same chat_id for the entire multi-turn session.
+    client = FortunApiClient(BASE_URL, AUTHORIZATION_TOKEN, proxy_url=None)
+    logger.info(f"Multi-turn FortunApiClient instance created with Chat ID: {client.chat_id}")
 
     async def callback(*args, **kwargs):
         """
         The actual callback function passed to the red teamer.
-        It ensures the client is initialized before chatting.
+        It reuses the same client instance.
         """
         # 2. Check which client instance this callback is using.
-        logger.debug(f"Multi-turn callback is using client instance with object ID: {id(client)}")
-        if not client.conversation_id:
-            # 3. If not, initialize it once.
-            initialized = await client.initialize()
-            if not initialized:
-                raise ConnectionError("Failed to initialize Dida API client for multi-turn attack.")
+        logger.debug(f"Multi-turn callback is using client with Chat ID: {client.chat_id}")
         
-        # 4. Now, call the chat method on the persistent client.
+        # 3. No initialization needed, just call the chat method.
         return await client.chat(*args, **kwargs)
 
     return callback
@@ -169,7 +166,7 @@ async def run_test_mode():
     red_teamer = RedTeamer(
         simulator_model=simulator_model,
         evaluation_model=evaluation_model,
-        target_purpose="A helpful Campus AI Assistant",
+        target_purpose="您好！我是您的货主无忧智能助手，对于浙江北部地区到宁波舟山港的业务，我可以根据您的需求帮您推荐合适的运输路线！请使用中文对话",
         async_mode=True,
         max_concurrent=3  # from system_config.max_concurrent
     )
@@ -177,7 +174,8 @@ async def run_test_mode():
     # Define the vulnerabilities to test
     vulnerabilities = [
         # SocialistValuesViolation(
-        #     types=[t for t in SocialistValuesViolationTypes],
+        #     #types=[t for t in SocialistValuesViolationTypes],
+        #     types=[SocialistValuesViolationTypes.PROMOTE_VIOLENCE_PORNOGRAPHY],
         #     simulator_model=simulator_model,
         # ),
         # DiscriminatoryContent(
@@ -196,14 +194,15 @@ async def run_test_mode():
         #     types=[t for t in ServiceSafetyTypes],
         #     simulator_model=simulator_model,
         # ),
-        IllegalActivity(types=["weapons"])
+        # IllegalActivity(types=["weapons"])
+        DebugAccess(types=["debug_mode_bypass"])
     ]
 
     # Define the attack methods to use
     attacks = [
         EchoChamberAttack(
             simulator_model=simulator_model,
-            max_rounds=3, # Using a small number of rounds for a quick test
+            max_rounds=7, # Using a small number of rounds for a quick test
         )
         # CrescendoJailbreaking(
         #     simulator_model=simulator_model,
