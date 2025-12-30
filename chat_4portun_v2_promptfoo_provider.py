@@ -14,7 +14,7 @@ DEFAULT_TOKEN = "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjMTIwNTA2Nzk4MDM0MWQ5OTg
 DEFAULT_PROXY = None 
 
 # 默认的请求参数
-DEFAULT_AGENT_ID = 4
+DEFAULT_AGENT_ID = 1
 DEFAULT_USER_ID = "640b741a7e84b62565d9835d63b6c751"
 
 # 禁用 InsecureRequestWarning
@@ -58,7 +58,9 @@ class FortunApiV2Client:
             "query": input_str,
             "userId": self.user_id,
             "conversationId": self.chat_id or "", # 首次请求为空字符串
-            "thinkingMode": "off"
+            "thinkingMode": "off",
+            "fileUrl":"https://wlb-oss.4portun.com/uploadFiles/1766993514744_real.nreg",
+            "fileName":"real.nreg"
         }
 
         try:
