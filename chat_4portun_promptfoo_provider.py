@@ -4,27 +4,26 @@ import asyncio
 import urllib3
 import uuid
 import logging
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 # ================= 配置区域 =================
-# 你可以在这里硬编码默认值，也可以在 promptfooconfig.yaml 中配置
 DEFAULT_BASE_URL = "https://prod-ai.4portun.com/ai/api/route/chat/graph"
 DEFAULT_TOKEN = "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjMTIwNTA2Nzk4MDM0MWQ5OTgwN2Y2NDJhYzU5MTE5ZiIsImlhdCI6MTc2NjU0MTUwNSwiZXhwIjoxNzY3MTQ2MzA1fQ.NsVgVISa7aZo_SoSp1B0Z6taxIfG6rXjTbp5Q62mWpU"
-DEFAULT_PROXY = None  # 例如: "http://127.0.0.1:8080"
+DEFAULT_PROXY = None 
 
 # 禁用 InsecureRequestWarning
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 设置简单的日志打印，替代原有的 custom logger
+# 日志配置
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("FortunProvider")
 # ===========================================
 
 class FortunApiClient:
     """
-    一个用于与 4portun Chat API 交互的客户端。
+    支持多轮对话状态保持的客户端
     """
-    def __init__(self, base_url, auth_token, proxy_url=None):
+    def __init__(self, base_url: str, auth_token: str, chat_id: str, proxy_url: str = None):
         self.base_url = base_url
         self.headers = {
             "Authorization": auth_token,
@@ -32,12 +31,19 @@ class FortunApiClient:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
         }
         self.proxy = proxy_url
-        self.chat_id = str(uuid.uuid4())
-        # logger.info(f"New session initialized. Chat ID: {self.chat_id}")
+        self.chat_id = chat_id # 使用传入的固定 ID 保持会话
 
     async def chat(self, input_str: str) -> str:
-        call_id = uuid.uuid4()
-        # logger.info(f"Sending input: {input_str[:50]}...")
+        # 如果 prompt 是 JSON 格式（Promptfoo 多轮模式常见），提取最后一条消息的内容
+        try:
+            prompt_data = json.loads(input_str)
+            if isinstance(prompt_data, list):
+                input_str = prompt_data[-1].get('content', input_str)
+            elif isinstance(prompt_data, dict):
+                input_str = prompt_data.get('content', input_str)
+        except:
+            # 说明是普通字符串，直接使用
+            pass
 
         params = {
             "message": input_str,
@@ -75,37 +81,42 @@ class FortunApiClient:
                                 except json.JSONDecodeError:
                                     continue
                     
-                    # 优先使用 nodeInfo 中的完整回答，如果不存在则使用拼接的回答
-                    final_result = final_answer_from_node if final_answer_from_node else full_answer
-                    return final_result
+                    return final_answer_from_node if final_answer_from_node else full_answer
                     
         except Exception as e:
-            error_msg = f"API Error: {str(e)}"
-            logger.error(error_msg)
+            logger.error(f"API Error: {str(e)}")
             raise e
 
 # ================= Promptfoo 接口函数 =================
 
-def call_api(prompt, options, context):
+def call_api(prompt: str, options: Dict[str, Any], context: Dict[str, Any]):
     """
-    Promptfoo 调用的入口函数
+    Promptfoo 调用的入口函数，支持多轮状态保持
     """
-    # 1. 从 options 中获取配置，如果没有则使用默认值
     config = options.get('config', {})
     
     base_url = config.get('baseUrl', DEFAULT_BASE_URL)
     token = config.get('token', DEFAULT_TOKEN)
     proxy = config.get('proxyUrl', DEFAULT_PROXY)
     
-    # 2. 初始化客户端
-    # 注意：每次调用都会创建一个新的 chat_id，这在 redteam 中通常是期望的行为（无状态攻击）
-    client = FortunApiClient(base_url, token, proxy_url=proxy)
+    # --- 核心逻辑：获取或生成会话 ID ---
+    # 1. 优先尝试从 context 提取 testCase 的 ID (这能保证同一个测试用例的多轮对话 chatId 一致)
+    # 2. 如果没有，则使用 Promptfoo 提供的 vars 里的唯一标识
+    # 3. 最后才降级使用随机 ID
+    vars = context.get('vars', {})
+    session_id = vars.get('uuid') or vars.get('chatId') or context.get('uuid')
+    
+    if not session_id:
+        # 如果是单轮测试且没提供 ID，则生成一个
+        session_id = str(uuid.uuid4())
+    
+    # 打印日志方便调试多轮追踪
+    # logger.info(f"Session ID: {session_id} | Prompt length: {len(prompt)}")
 
-    # 3. 执行异步调用
+    client = FortunApiClient(base_url, token, chat_id=session_id, proxy_url=proxy)
+
     try:
-        # 使用 asyncio.run 来运行异步代码
         output = asyncio.run(client.chat(prompt))
-        
         return {
             "output": output
         }
@@ -116,8 +127,13 @@ def call_api(prompt, options, context):
 
 # ================= 本地测试代码 =================
 if __name__ == "__main__":
-    print("正在测试 provider...")
-    test_prompt = "Hello, who are you?"
-    # 模拟 promptfoo 的调用参数
-    result = call_api(test_prompt, {"config": {}}, {})
-    print(f"Result: {result}")
+    print("正在模拟多轮对话测试...")
+    
+    # 模拟第一轮
+    ctx1 = {"uuid": "test-session-123"}
+    res1 = call_api("你好，我是小明", {"config": {}}, ctx1)
+    print(f"Round 1: {res1}")
+
+    # 模拟第二轮（使用相同的 uuid）
+    res2 = call_api("你还记得我叫什么名字吗？", {"config": {}}, ctx1)
+    print(f"Round 2: {res2}")

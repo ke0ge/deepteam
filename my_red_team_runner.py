@@ -16,6 +16,8 @@ from deepteam.vulnerabilities import (
     PromptLeakage,
     Bias,
     IllegalActivity,
+    Toxicity,
+    Robustness,
     CommercialViolation,
     CommercialViolationTypes,
     DiscriminatoryContent,
@@ -105,41 +107,45 @@ LocalModel.generate = logged_generate_full_copy
 
 
 # Import the client from our refactored module
-from chat_4portun import FortunApiClient, BASE_URL, AUTHORIZATION_TOKEN, PROXY_URL
+from chat_4portun_v2_promptfoo_provider import FortunApiV2Client, DEFAULT_BASE_URL, DEFAULT_TOKEN
 from deepteam.attacks.multi_turn import BaseMultiTurnAttack
 # --- Callback Strategies ---
 
-async def single_turn_callback_factory(*args, **kwargs):
+async def single_turn_callback_factory(prompt: str, *args, **kwargs):
     """
-    Factory function that creates a new client and session for each call.
-    Ideal for independent, single-turn attacks.
+    Factory function that creates a new client for each single-turn call,
+    initiating a new conversation each time.
     """
-    # For 4portun, each call can be a new session if needed, or we can reuse.
-    # Here, we create a new client for simplicity, ensuring no cross-talk.
-    client = FortunApiClient(BASE_URL, AUTHORIZATION_TOKEN, proxy_url=None)
-    # No explicit initialize() call is needed as chat_id is created in __init__
-    return await client.chat(*args, **kwargs)
+    # For a new conversation, chat_id should be an empty string.
+    client = FortunApiV2Client(DEFAULT_BASE_URL, DEFAULT_TOKEN, chat_id="")
+    result = await client.chat(prompt)
+    return result["output"]
 
 def get_multi_turn_callback():
     """
-    Creates a stateful callback for multi-turn attacks.
-    It uses a single client instance throughout the attack.
+    Creates a stateful callback for multi-turn attacks that manages conversation state.
     """
-    # 1. A single client is created and lives within this closure.
-    # This client maintains the same chat_id for the entire multi-turn session.
-    client = FortunApiClient(BASE_URL, AUTHORIZATION_TOKEN, proxy_url=None)
-    logger.info(f"Multi-turn FortunApiClient instance created with Chat ID: {client.chat_id}")
+    # A dictionary to hold the conversation state, living within this closure.
+    state = {"conversation_id": ""}
+    logger.info("Multi-turn callback created. Initial conversation_id is empty.")
 
-    async def callback(*args, **kwargs):
+    async def callback(prompt: str, *args, **kwargs):
         """
-        The actual callback function passed to the red teamer.
-        It reuses the same client instance.
+        The actual callback function. It reuses the conversation_id from the state.
         """
-        # 2. Check which client instance this callback is using.
-        logger.debug(f"Multi-turn callback is using client with Chat ID: {client.chat_id}")
+        # Use the current conversation_id from the closure's state.
+        client = FortunApiV2Client(DEFAULT_BASE_URL, DEFAULT_TOKEN, chat_id=state["conversation_id"])
+        logger.debug(f"Multi-turn callback using conversation_id: '{state['conversation_id']}'")
         
-        # 3. No initialization needed, just call the chat method.
-        return await client.chat(*args, **kwargs)
+        result = await client.chat(prompt)
+        
+        # Update the state with the new conversation_id returned by the API.
+        new_conversation_id = result.get("conversationId")
+        if new_conversation_id and state["conversation_id"] != new_conversation_id:
+            state["conversation_id"] = new_conversation_id
+            logger.debug(f"conversation_id updated to: '{new_conversation_id}'")
+            
+        return result["output"]
 
     return callback
 
@@ -166,36 +172,28 @@ async def run_test_mode():
     red_teamer = RedTeamer(
         simulator_model=simulator_model,
         evaluation_model=evaluation_model,
-        target_purpose="您好！我是您的货主无忧智能助手，对于浙江北部地区到宁波舟山港的业务，我可以根据您的需求帮您推荐合适的运输路线！请使用中文对话",
+        target_purpose="您好！我是您的货主无忧智能助手，对于浙江北部区域到宁波舟山港的业务，我可以根据您的需求帮您推荐合适的运输路线！请使用中文对话",
         async_mode=True,
         max_concurrent=3  # from system_config.max_concurrent
     )
 
     # Define the vulnerabilities to test
     vulnerabilities = [
-        # SocialistValuesViolation(
-        #     #types=[t for t in SocialistValuesViolationTypes],
-        #     types=[SocialistValuesViolationTypes.PROMOTE_VIOLENCE_PORNOGRAPHY],
+        # PromptLeakage(
+        #     types=["permissions_and_roles"],
         #     simulator_model=simulator_model,
         # ),
-        # DiscriminatoryContent(
-        #     types=[t for t in DiscriminatoryContentTypes],
+        # Toxicity(
+        #     types=["insults"],
         #     simulator_model=simulator_model,
         # ),
-        # CommercialViolation(
-        #     types=[t for t in CommercialViolationTypes],
+        IllegalActivity(
+            types=["weapons"],
+            simulator_model=simulator_model,
+        ),
+        # Robustness(
         #     simulator_model=simulator_model,
         # ),
-        # RightsInfringement(
-        #     types=[t for t in RightsInfringementTypes],
-        #     simulator_model=simulator_model,
-        # ),
-        # ServiceSafety(
-        #     types=[t for t in ServiceSafetyTypes],
-        #     simulator_model=simulator_model,
-        # ),
-        # IllegalActivity(types=["weapons"])
-        DebugAccess(types=["debug_mode_bypass"])
     ]
 
     # Define the attack methods to use
